@@ -51,3 +51,5 @@ def initialize(M):
         (ts,dphis,charts) = integrate(ode_differential,chart_update_differential,jnp.tile(jnp.eye(M.m),(M.N,1,1)),None,dts,qps)
         return (ts,dphis,charts)
     M.flow_differential = flow_differential
+
+

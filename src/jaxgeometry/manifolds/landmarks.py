@@ -72,6 +72,78 @@ class landmarks(Manifold):
         ##### Kernel on M:
         if self.kernel == 'Gaussian':
             k = lambda x: self.k_alpha*jnp.exp(-.5*jnp.square(jnp.tensordot(x,self.inv_k_sigma,(x.ndim-1,1))).sum(x.ndim-1))
+        elif self.kernel == 'Gaussian_v2':
+            def k(q1,q2):
+                q1 = q1.reshape((-1,self.m))[:,np.newaxis,:]
+                q2 = q2.reshape((-1,self.m))[np.newaxis,:,:]
+
+                diff = q1-q2
+
+                return self.k_alpha*jnp.exp(-.5*jnp.square(jnp.tensordot(diff,self.inv_k_sigma,(diff.ndim-1,1))).sum(diff.ndim-1))
+
+            # changed from: k = lambda x: self.k_alpha*jnp.exp(-.5*jnp.square(jnp.tensordot(x,self.inv_k_sigma,(x.ndim-1,1))).sum(x.ndim-1))
+        elif self.kernel == 'Gaussian_spatially_varying':
+            # define amplitude function
+            a= 0.999 #0.999 # max value of partition-of-unity function
+            b=1-a
+
+            # # flexible bump function
+            # range_h = 0.00001 #0.002
+            # decay_rate = 10000 #2000 # the higher the faster
+            # def simple_bump(norm, range_h, a, decay_rate=10, constant=0):
+            #     # range_h: an offset determining from which x-value the function should decay
+            #     # decay_rate: a parameter determining the decay-rate. 10 corresponds to an interval of length 1, which
+            #     #             also means that for range_h = 0 the actual range will be about 1.
+                
+            #     return  (a-b) - (a-b)/(1 + 100*jax.numpy.exp(-(norm - range_h)*decay_rate)) + b
+            
+            # def weight_function(x):
+            # #     return hard_threshold(x, range_h=range_h)
+            #     return simple_bump(x, range_h=range_h, decay_rate=decay_rate, a=a)
+
+
+            # gaussian bump function
+            def weight_function(x):
+                width = 0.01
+                c = norm.pdf(x, loc=0, scale=width)/norm.pdf(0, loc=0, scale=width)
+                return a*c + b*(1-c)
+
+            # partition of unity functions
+
+            center = jnp.array([1.,0]) #jnp.array([0.94192279, -0.70676437]) # scatter_points[0] 
+
+            def u1(x):
+                return weight_function(jnp.dot(x - center, x - center))
+
+            def u2(x):
+                return 1 - weight_function(jnp.dot(x - center, x - center))
+
+            u1 = jax.vmap(u1)
+            u2 = jax.vmap(u2)
+            
+            alpha_1 = 1
+            alpha_2 = 1
+
+            #amp = lambda Q:   alpha_1 * jnp.sqrt(u1(Q[:,0:2]) * u1(Q[:,2:4])) + alpha_2 * jnp.sqrt(u2(Q[:,0:2]) * u2(Q[:,2:4]))
+            # self.k_alpha = amp
+
+            # def k(Q):
+            #     Q_x = Q[:,0:2]
+            #     Q_y = Q[:,2:4]
+            #     return self.k_alpha(Q) * jnp.exp(-.5*jnp.square(jnp.tensordot(Q_x - Q_y,self.inv_k_sigma,(Q_x.ndim-1,1))).sum(Q_x.ndim-1))
+            
+            def amp(q_1, q_2):
+                q_1 = q_1.reshape((-1,self.m))
+                q_2 = q_2.reshape((-1,self.m))
+                return alpha_1 * jnp.sqrt(jnp.outer(u1(q_1), u1(q_2))) + alpha_2 * jnp.sqrt(jnp.outer(u2(q_1), u2(q_2)))
+            
+            self.k_alpha = amp
+
+            def k(q_1,q_2):
+                q_1_ = q_1.reshape((-1,self.m))[:,np.newaxis,:]
+                q_2_ = q_2.reshape((-1,self.m))[np.newaxis,:,:]
+                return self.k_alpha(q_1, q_2) * jnp.exp(-.5*jnp.square(jnp.tensordot(q_1_ - q_2_,self.inv_k_sigma,(q_1_.ndim-1,1))).sum(q_1_.ndim-1))
+            
         elif self.kernel == 'K0':
             def k(x):
                 r = jnp.sqrt((1e-7+jnp.square(jnp.tensordot(x,self.inv_k_sigma,(x.ndim-1,1))).sum(x.ndim-1)))
@@ -103,13 +175,19 @@ class landmarks(Manifold):
                     return self.k_alpha*(r**(2*self.order-self.m))
         else:
             raise Exception('unknown kernel specified')
+
         self.k = k
+        
         # kernel differentials
         self.dk = jax.grad(self.k)
         self.d2k = jax.hessian(self.k)
 
         # in coordinates
-        self.k_q = lambda q1,q2: self.k(q1.reshape((-1,self.m))[:,np.newaxis,:]-q2.reshape((-1,self.m))[np.newaxis,:,:])
+        if kernel == 'Gaussian_spatially_varying' or kernel == 'Gaussian_v2':
+            self.k_q = k
+        else:
+            self.k_q = lambda q1,q2: self.k(q1.reshape((-1,self.m))[:,np.newaxis,:]-q2.reshape((-1,self.m))[np.newaxis,:,:])  
+
         self.K = lambda q1,q2: (self.k_q(q1,q2)[:,:,np.newaxis,np.newaxis]*jnp.eye(self.m)[np.newaxis,np.newaxis,:,:]).transpose((0,2,1,3)).reshape((q1.size,q2.size))
         # differentials
         self.dk_q = lambda q1,q2: jax.vmap(jax.vmap(lambda x1,x2: self.dk(x1-x2),(0,None)),(None,0))(q1.reshape((-1,self.m)),q2.reshape((-1,self.m)))
