@@ -24,6 +24,8 @@ from jaxgeometry.plotting import *
 
 from jaxgeometry.manifolds.manifold import *
 
+from jax.scipy.stats import norm
+
 class landmarks(Manifold):
     """ LDDMM landmark manifold """
 
