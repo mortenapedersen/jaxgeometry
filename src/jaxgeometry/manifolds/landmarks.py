@@ -17,7 +17,6 @@
 # along with Jax Geometry. If not, see <http://www.gnu.org/licenses/>.
 #
 
-
 from jaxgeometry.setup import *
 from jaxgeometry.params import *
 from jaxgeometry.plotting import *
@@ -47,7 +46,7 @@ class landmarks(Manifold):
         """ dual space basis for Laplacian kernel etc., subspace of polynomials """     
         return self.get_B(q)[:,self.dim-self.codim:]
 
-    def __init__(self,N=1,m=2,k_alpha=1.,k_sigma=None,kernel='Gaussian',order=2):
+    def __init__(self,N=1,m=2,k_alpha=1.,k_sigma=None,kernel='Gaussian',order=2,k=None):
         Manifold.__init__(self)
 
         self.N = N # number of landmarks
@@ -72,7 +71,10 @@ class landmarks(Manifold):
         self.kernel = kernel
 
         ##### Kernel on M:
-        if self.kernel == 'Gaussian':
+        if k is not None:
+            self.k = k
+            self.kernel = 'custom'
+        elif self.kernel == 'Gaussian':
             k = lambda x: self.k_alpha*jnp.exp(-.5*jnp.square(jnp.tensordot(x,self.inv_k_sigma,(x.ndim-1,1))).sum(x.ndim-1))
         elif self.kernel == 'Gaussian_v2':
             def k(q1,q2):
@@ -106,13 +108,13 @@ class landmarks(Manifold):
 
             # gaussian bump function
             def weight_function(x):
-                width = 0.01
+                width = 0.001
                 c = norm.pdf(x, loc=0, scale=width)/norm.pdf(0, loc=0, scale=width)
                 return a*c + b*(1-c)
 
             # partition of unity functions
 
-            center = jnp.array([1.,0]) #jnp.array([0.94192279, -0.70676437]) # scatter_points[0] 
+            center = jnp.array([0.94192279, -0.70676437]) # scatter_points[0] 
 
             def u1(x):
                 return weight_function(jnp.dot(x - center, x - center))
@@ -178,22 +180,26 @@ class landmarks(Manifold):
         else:
             raise Exception('unknown kernel specified')
 
-        self.k = k
-        
+        # in coordinates
+        if self.kernel in {'Gaussian_spatially_varying', 'Gaussian_v2', 'custom'}:
+            self.k_q = k
+            self.k = lambda q1,q2: jnp.take(k(q1,q2), 0)  # this is hacky, todo: fix the vectorization earlier
+        else:
+            self.k = k
+            self.k_q = lambda q1,q2: self.k(q1.reshape((-1,self.m))[:,np.newaxis,:]-q2.reshape((-1,self.m))[np.newaxis,:,:])  
+
         # kernel differentials
         self.dk = jax.grad(self.k)
         self.d2k = jax.hessian(self.k)
 
-        # in coordinates
-        if kernel == 'Gaussian_spatially_varying' or kernel == 'Gaussian_v2':
-            self.k_q = k
-        else:
-            self.k_q = lambda q1,q2: self.k(q1.reshape((-1,self.m))[:,np.newaxis,:]-q2.reshape((-1,self.m))[np.newaxis,:,:])  
-
         self.K = lambda q1,q2: (self.k_q(q1,q2)[:,:,np.newaxis,np.newaxis]*jnp.eye(self.m)[np.newaxis,np.newaxis,:,:]).transpose((0,2,1,3)).reshape((q1.size,q2.size))
-        # differentials
-        self.dk_q = lambda q1,q2: jax.vmap(jax.vmap(lambda x1,x2: self.dk(x1-x2),(0,None)),(None,0))(q1.reshape((-1,self.m)),q2.reshape((-1,self.m)))
-        self.d2k_q = lambda q1,q2: jax.vmap(jax.vmap(lambda x1,x2: self.d2k(x1-x2),(0,None)),(None,0))(q1.reshape((-1,self.m)),q2.reshape((-1,self.m)))
+
+        if self.kernel in {'Gaussian_spatially_varying', 'Gaussian_v2', 'custom'}:
+            self.dk_q = lambda q1,q2: jax.vmap(jax.vmap(lambda x1,x2: self.dk(x1,x2),(0,None)),(None,0))(q1.reshape((-1,self.m)),q2.reshape((-1,self.m)))
+            self.d2k_q = lambda q1,q2: jax.vmap(jax.vmap(lambda x1,x2: self.d2k(x1,x2),(0,None)),(None,0))(q1.reshape((-1,self.m)),q2.reshape((-1,self.m)))
+        else:
+            self.dk_q = lambda q1,q2: jax.vmap(jax.vmap(lambda x1,x2: self.dk(x1-x2),(0,None)),(None,0))(q1.reshape((-1,self.m)),q2.reshape((-1,self.m)))
+            self.d2k_q = lambda q1,q2: jax.vmap(jax.vmap(lambda x1,x2: self.d2k(x1-x2),(0,None)),(None,0))(q1.reshape((-1,self.m)),q2.reshape((-1,self.m)))
 
         ##### Metric:
         def gsharp(q):
