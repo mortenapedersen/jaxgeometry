@@ -35,12 +35,12 @@ def initialize(M,f=None,method='BFGS'):
     #dloss = lambda x,v,y: approx_fprime(v,lambda v: loss(x,v,y),1e-4)
 
     from jax.scipy.optimize import minimize
-    def shoot(x,y,v0=None):        
+    def shoot(x,y,v0=None,maxiter=100):        
 
         if v0 is None:
             v0 = jnp.zeros(M.dim)
 
-        res = minimize(lambda w: loss(x,w,y), v0, method=method, options={'maxiter': 100})
+        res = minimize(lambda w: loss(x,w,y), v0, method=method, options={'maxiter': maxiter})
 
         return (res.x,res.fun)
 
